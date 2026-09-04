@@ -1,0 +1,63 @@
+{
+  "name": "dsh-diary",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "日记助手 dsh 插件：web 页提交 → 确定性组装落盘 → ctx.llm 生成关键词/一句话总结/AI评注",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhm20001/dsh-diary.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zhm20001/dsh-diary/issues"
+  },
+  "homepage": "https://github.com/zhm20001/dsh-diary#readme",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "diary",
+    "journal",
+    "llm"
+  ],
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./src/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib", "cordis.patch.yml", "assets", "src/client.js"],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-sidebar"]
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-llm": "^0.0.1-rc.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/schemastery": "^3.18.2",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

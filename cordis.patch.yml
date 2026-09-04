@@ -1,0 +1,5 @@
+# 正式装载行：先 pnpm build，再 dsh plugin --profile web add <本目录>。
+# 路径默认值都在插件 Config 里，这里不再重复配置。
+- insert:
+    - id: diary
+      name: 'dsh-diary'

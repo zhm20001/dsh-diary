@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      # lib/ 随仓库提交（克隆分发免构建）；若产物与 src 不一致，这里会显示为 diff
+      - run: git diff --exit-code -- lib/ || (echo '::error::lib/ 产物与 src 不一致，请本地 pnpm build 后一并提交' && exit 1)

@@ -1,0 +1,8 @@
+# 开发 overlay：把已装载的 diary 插件指向沙箱——冒烟不污染真实日记。
+# 前提：插件已装入本 profile（dsh plugin --profile web add <本目录>）且 pnpm build 过，
+# 覆盖的是 profile 里那个（link 到本目录的）插件实例，直接测 lib 产物。
+# 用法：dsh web --patch dev.patch.yml --port <port>（--patch 须在 --port 之前，二者都是 web 子命令的选项）
+- id: diary
+  config:
+    diaryDir: /tmp/diary-sandbox
+    pagePath: /diary-dev

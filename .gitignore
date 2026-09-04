@@ -1,0 +1,17 @@
+node_modules/
+.DS_Store
+
+# 运行时本地配置（含个人日记路径；示例见 config.example.json）
+config.json
+
+# 制作期的参考文档与教学工作区（留盘不入库）
+docs/
+MISSION.md
+NOTES.md
+RESOURCES.md
+lessons/
+learning-records/
+assets/lesson.css
+
+# 会话工作区
+.zcode/
