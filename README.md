@@ -42,10 +42,12 @@ dsh plugin --profile web add <本目录路径>
 | 层 | 说明 |
 |---|---|
 | cordis patch / profile config | 装载时注入，最高优先；此处设了 `diaryDir` 时页面设置卡会提示「被覆盖」 |
-| 插件根 `config.json` | 页面设置卡维护的就是它；手工编辑也行，`diaryDir` 逐请求现读、改完即生效。字段见 [`config.example.json`](./config.example.json)，相对路径按插件根解析、支持 `~/` |
-| 内置默认 | 模板兜底 `assets/diary-template.md`；无目录则进入设置卡模式 |
+| 插件根 `config.json` | 页面设置卡与 prompt 卡维护的就是它；手工编辑也行，逐请求现读、改完即生效。字段见 [`config.example.json`](./config.example.json)，相对路径按插件根解析、支持 `~/`（`summaryPrompt` 为原文存取的文本键，不做路径处理） |
+| 内置默认 | 模板兜底 `assets/diary-template.md`；无目录则进入设置卡模式；评注 prompt 兜底为内置默认 |
 
-其余插件项（cordis patch 层）：`provider` / `model`（总结模型，默认 `deepseek-official` / `deepseek-chat`）、`temperature`（0.6）、`timeoutMs`（120000）、`nightCutoff`（6）、`pagePath`（`/diary`；改动需同步 `src/client.js` 里的 href）。
+**自定义评注 prompt**：「AI 评注模型」选择器旁的 📝 打开 prompt 卡——阅读驱动 AI 评注的系统提示词，可编辑、保存、「恢复默认」；存 `config.json` 的 `summaryPrompt`，即时生效（优先级同上表）。保存时校验输出契约：【今日关键词】【一句话总结】【评注】三个标记必须保留（【当日 emoji】行可删，删后当日格子降级绿块）；自定义只影响之后的总结，已写入日记的评注块不变。cordis patch 塞入的坏 prompt 会在总结时响亮报错（不静默回退）。
+
+其余插件项（cordis patch 层）：`provider` / `model`（总结模型，默认 `deepseek-official` / `deepseek-chat`）、`temperature`（0.6）、`timeoutMs`（120000）、`nightCutoff`（6）、`pagePath`（`/diary`；改动需同步 `src/client.js` 里的 href）、`summaryPrompt`（评注 prompt 覆盖）。
 
 ## 隐私与数据
 

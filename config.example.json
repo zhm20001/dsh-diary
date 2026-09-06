@@ -1,4 +1,5 @@
 {
   "diaryDir": "~/Documents/日记",
-  "templatePath": "assets/diary-template.md"
+  "templatePath": "assets/diary-template.md",
+  "summaryPrompt": ""
 }

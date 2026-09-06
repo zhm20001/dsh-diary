@@ -42,10 +42,12 @@ Three layers, highest priority first:
 | Layer | Notes |
 |---|---|
 | cordis patch / profile config | Injected at load time; when `diaryDir` is set here the setup card warns "overridden" |
-| `config.json` in the plugin root | What the setup card maintains; hand-editable too. `diaryDir` is re-read on every request — edits apply immediately. See [`config.example.json`](./config.example.json); relative paths resolve against the plugin root, `~/` supported |
-| Built-in defaults | Template falls back to `assets/diary-template.md`; with no directory configured the page enters setup mode |
+| `config.json` in the plugin root | What the setup card and the prompt card maintain; hand-editable too. Re-read on every request — edits apply immediately. See [`config.example.json`](./config.example.json); relative paths resolve against the plugin root, `~/` supported (`summaryPrompt` is a plain text key, never path-resolved) |
+| Built-in defaults | Template falls back to `assets/diary-template.md`; with no directory configured the page enters setup mode; the comment prompt falls back to the built-in default |
 
-Other plugin options (cordis patch layer): `provider` / `model` (summary model, defaults `deepseek-official` / `deepseek-chat`), `temperature` (0.6), `timeoutMs` (120000), `nightCutoff` (6), `pagePath` (`/diary`; if changed, update the href in `src/client.js` too).
+**Customizing the comment prompt**: the 📝 button next to the "comment model" selector opens the prompt card — read the system prompt that drives the AI comment, then edit, save, or reset to default. It is stored as `summaryPrompt` in `config.json` and takes effect immediately (precedence as in the table above). Saving validates the output contract: the three markers 【今日关键词】 (keyword), 【一句话总结】 (one-line summary) and 【评注】 (comment) must stay (the 【当日 emoji】 line is optional — without it that day's heatmap cell falls back to green); a custom prompt only shapes future summaries, never rewrites comment blocks already in your diary. A broken prompt injected via a cordis patch fails loudly at summary time (no silent fallback).
+
+Other plugin options (cordis patch layer): `provider` / `model` (summary model, defaults `deepseek-official` / `deepseek-chat`), `temperature` (0.6), `timeoutMs` (120000), `nightCutoff` (6), `pagePath` (`/diary`; if changed, update the href in `src/client.js` too), `summaryPrompt` (comment prompt override).
 
 ## Privacy & your data
 
