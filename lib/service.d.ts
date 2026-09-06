@@ -10,6 +10,7 @@ export interface DiaryPluginConfig {
     temperature: number;
     timeoutMs: number;
     nightCutoff: number;
+    summaryPrompt: string;
 }
 export declare class DiaryService extends Service {
     static inject: string[];
@@ -22,6 +23,7 @@ export declare class DiaryService extends Service {
         temperature: z<number, number>;
         timeoutMs: z<number, number>;
         nightCutoff: z<number, number>;
+        summaryPrompt: z<string, string>;
     }>, Schemastery.ObjectT<{
         diaryDir: z<string, string>;
         templatePath: z<string, string>;
@@ -31,6 +33,7 @@ export declare class DiaryService extends Service {
         temperature: z<number, number>;
         timeoutMs: z<number, number>;
         nightCutoff: z<number, number>;
+        summaryPrompt: z<string, string>;
     }>>;
     readonly config: DiaryPluginConfig;
     readonly pluginCtx: Context;
@@ -41,6 +44,8 @@ export declare class DiaryService extends Service {
     private diaryDir;
     /** patch/profile 给了非空目录且与 config.json 不同 → 页面设置被覆盖，写入不会生效。 */
     private patchOverridden;
+    /** 评注 prompt 三级解析（ADR-0001，与目录同款优先级）：cordis patch > config.json > 内置默认。 */
+    private effectivePrompt;
     private todayState;
     private handleToday;
     /** 日记元表目录（CONTEXT.md「日记元表」）：`<diaryDir>/.diary-meta/`，一年一个 YYYY.json。 */
@@ -71,6 +76,12 @@ export declare class DiaryService extends Service {
     private handleSettings;
     /** 宿主 webRuntime 的信任域名单（可能未注入，取不到就当空表）。 */
     private trustedHosts;
+    /**
+     * GET /api/prompt：生效 prompt（三级解析后的值）+ customized（config.json 有自定义）+ overridden（patch 覆盖）。
+     * POST /api/prompt：{ prompt } 保存自定义（契约校验）；{ reset: true } 删键恢复内置默认。
+     * 与 /api/settings 同款围栏：仅本机（回环）请求可写；被 patch 覆盖时 409。
+     */
+    private handlePrompt;
     private handleSubmit;
     private handleRetry;
     private summarize;

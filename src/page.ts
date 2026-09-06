@@ -155,6 +155,7 @@ const PAGE = `<!doctype html>
   .heatTitle { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; color: var(--text-strong); }
   .heatNav { display: flex; align-items: center; gap: 6px; }
   .hbtn {
+    position: relative;
     width: 26px; height: 26px; padding: 0; display: flex; align-items: center; justify-content: center;
     font: 600 15px/1 var(--font); color: var(--text-body);
     background: var(--chip-bg); border: 1px solid var(--chip-border);
@@ -202,6 +203,14 @@ const PAGE = `<!doctype html>
     transition: border-color 0.15s ease;
   }
   select:focus { border-color: var(--input-focus-border); }
+
+  /* 模型选择器 + 📝 prompt 入口同行；pdot 是「已自定义」小圆点 */
+  .modelRow { display: flex; gap: 6px; align-items: center; }
+  .modelRow select { flex: 1; min-width: 0; }
+  .pdot {
+    position: absolute; top: -3px; right: -3px; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--primary); border: 1.5px solid var(--panel-bg);
+  }
   .btn {
     padding: 9px 20px; font: 600 13px var(--font); border-radius: var(--radius-btn);
     cursor: pointer; border: 1px solid transparent; transition: background 0.15s ease, color 0.15s ease;
@@ -212,6 +221,30 @@ const PAGE = `<!doctype html>
   #retry { display: none; color: var(--text-body); background: var(--chip-bg); border-color: var(--chip-border); }
   #retry:hover:not(:disabled) { background: var(--chip-hover-bg); }
   #status { width: 100%; font-size: 12px; color: var(--text-muted); min-height: 1em; }
+
+  /* ── 评注 prompt 卡：📝 唤出，只读 pre →「编辑」textarea（ADR-0001）── */
+  .pcard {
+    margin-top: 18px; padding: 14px 16px;
+    background: var(--input-bg); border: 1px solid var(--input-border); border-radius: var(--radius-card);
+  }
+  .phead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .ptitle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--text-strong); }
+  .pbadge {
+    padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    color: var(--kw-text); background: var(--kw-bg); border: 1px solid var(--kw-border);
+  }
+  .pnote { margin: 10px 0 0; font-size: 12px; color: var(--err-text); }
+  .phint { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
+  .pview {
+    margin: 10px 0 0; padding: 12px 14px; max-height: 260px; overflow: auto;
+    font: 12.5px/1.8 var(--font-mono, monospace); color: var(--text-body);
+    background: var(--panel-bg); border: 1px solid var(--input-border); border-radius: var(--radius-input);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .pbtns { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .btn.ghost { color: var(--text-body); background: var(--chip-bg); border-color: var(--chip-border); }
+  .btn.ghost:hover:not(:disabled) { background: var(--chip-hover-bg); }
+  .pmsg { font-size: 12px; color: var(--err-text); min-height: 1.2em; }
 
   .err {
     display: none; margin-top: 16px; padding: 12px 14px;
@@ -242,6 +275,7 @@ const PAGE = `<!doctype html>
     .heatBody { padding-left: 20px; padding-right: 20px; }
     footer { padding-left: 20px; padding-right: 20px; }
     .field, select { width: 100%; max-width: none; }
+    .modelRow { flex-wrap: wrap; }
     .dirRow { flex-wrap: wrap; }
     .dirRow input { flex: 1 1 100%; }
   }
@@ -290,13 +324,34 @@ const PAGE = `<!doctype html>
       <div class="controls">
         <div class="field">
           <label for="model">AI 评注模型</label>
-          <select id="model"><option value="">加载模型列表…</option></select>
+          <div class="modelRow">
+            <select id="model"><option value="">加载模型列表…</option></select>
+            <button class="hbtn" id="promptBtn" type="button" title="评注 prompt">📝<span class="pdot" id="promptDot" hidden></span></button>
+          </div>
         </div>
         <button class="btn" id="go">保存并生成总结</button>
         <button class="btn" id="retry">仅重试总结</button>
         <span id="status"></span>
       </div>
       <div class="err" id="err"></div>
+      <div class="pcard" id="promptCard" hidden>
+        <div class="phead">
+          <div class="ptitle">评注 prompt <span class="pbadge" id="pBadge" hidden>已自定义</span></div>
+          <button class="hbtn" id="pEdit" type="button" title="编辑">✎</button>
+        </div>
+        <div class="pnote" id="pWarn" hidden></div>
+        <p class="phint">修改只影响之后的总结，已写入日记的评注块不会变。三个必需标记（【今日关键词】【一句话总结】【评注】）不能删。</p>
+        <pre class="pview" id="pView"></pre>
+        <div class="pedit" id="pEditBox" hidden>
+          <textarea id="pText" spellcheck="false"></textarea>
+          <div class="pbtns">
+            <button class="btn" id="pSave" type="button">保存</button>
+            <button class="btn ghost" id="pReset" type="button">恢复默认</button>
+            <button class="btn ghost" id="pCancel" type="button">取消</button>
+            <span class="pmsg" id="pMsg"></span>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="panel result" id="card">
       <span class="kw" id="kw"></span>
@@ -369,6 +424,93 @@ const PAGE = `<!doctype html>
   function parseJson(r) {
     return r.text().then(function (txt) { try { return JSON.parse(txt); } catch (e) { throw new Error('HTTP ' + r.status); } });
   }
+
+  // ── 评注 prompt 卡（ADR-0001）：📝 唤出 → 只读 pre；「✎」进 textarea；保存/取消/恢复默认 ──
+  var promptBtn = document.getElementById('promptBtn');
+  var promptDot = document.getElementById('promptDot');
+  var promptCard = document.getElementById('promptCard');
+  var pBadge = document.getElementById('pBadge');
+  var pWarn = document.getElementById('pWarn');
+  var pView = document.getElementById('pView');
+  var pEdit = document.getElementById('pEdit');
+  var pEditBox = document.getElementById('pEditBox');
+  var pText = document.getElementById('pText');
+  var pSave = document.getElementById('pSave');
+  var pReset = document.getElementById('pReset');
+  var pCancel = document.getElementById('pCancel');
+  var pMsg = document.getElementById('pMsg');
+  var promptCurrent = ''; // 最近拉到的生效 prompt，编辑框预填用它
+
+  promptBtn.addEventListener('click', function () {
+    var opening = promptCard.hidden;
+    promptCard.hidden = !opening;
+    if (opening) loadPrompt();
+  });
+
+  function promptViewMode() {
+    pEditBox.hidden = true;
+    pView.hidden = false;
+    pMsg.textContent = '';
+  }
+
+  // prompt 是用户文本：一律 textContent，绝不经 innerHTML
+  function loadPrompt() {
+    fetch(API + '/api/prompt')
+      .then(parseJson)
+      .then(function (j) {
+        promptCurrent = j.prompt || '';
+        pView.textContent = promptCurrent;
+        pBadge.hidden = !j.customized;
+        promptDot.hidden = !j.customized;
+        if (j.overridden) {
+          pWarn.hidden = false;
+          pWarn.textContent = '当前评注 prompt 由 profile/patch 配置覆盖，这里修改不会生效';
+        } else {
+          pWarn.hidden = true;
+        }
+        promptViewMode();
+      })
+      .catch(function () {
+        pWarn.hidden = false;
+        pWarn.textContent = '（prompt 接口不可达）';
+      });
+  }
+
+  pEdit.addEventListener('click', function () {
+    pText.value = promptCurrent;
+    pView.hidden = true;
+    pEditBox.hidden = false;
+    pMsg.textContent = '';
+    pText.focus();
+  });
+
+  pCancel.addEventListener('click', promptViewMode);
+
+  function promptPost(body, failLabel, done) {
+    pSave.disabled = true;
+    pReset.disabled = true;
+    fetch(API + '/api/prompt', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      .then(parseJson)
+      .then(done, function (e) { done({ ok: false, error: failLabel + '：' + String(e) }); })
+      .then(function () { pSave.disabled = false; pReset.disabled = false; });
+  }
+
+  pSave.addEventListener('click', function () {
+    pMsg.textContent = '';
+    promptPost({ prompt: pText.value }, '保存失败', function (j) {
+      if (j.ok) loadPrompt();
+      else pMsg.textContent = j.error || '保存失败';
+    });
+  });
+
+  pReset.addEventListener('click', function () {
+    if (!window.confirm('恢复内置默认评注 prompt？')) return;
+    pMsg.textContent = '';
+    promptPost({ reset: true }, '恢复失败', function (j) {
+      if (j.ok) loadPrompt();
+      else pMsg.textContent = j.error || '恢复失败';
+    });
+  });
 
   // ── 热力图板：/api/dates 拉数据（帧窗口由服务端 core.framesFor 算好），纯客户端切帧 ──
   var hPrev = document.getElementById('hPrev');

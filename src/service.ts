@@ -8,6 +8,7 @@
  *   GET  <pagePath>/api/dates     热力图数据：记录日聚合 + 当日 emoji + 半年帧窗口
  *   GET  <pagePath>/api/models    可选评注模型（provider 分组，来自 ctx.llm 模型目录）
  *   GET/POST <pagePath>/api/settings  日记目录设置：GET 读生效值；POST 写 config.json（仅本机请求）
+ *   GET/POST <pagePath>/api/prompt    评注 prompt：GET 读生效值；POST 保存自定义或 reset 恢复默认（仅本机请求）
  *   POST <pagePath>/api/submit    追加条目 + 生成总结（同日再提交 = 追加并重新总结；可选 provider/model 覆盖）
  *   POST <pagePath>/api/retry-summary  仅重新生成总结（总结失败后的补救，不重复追加条目）
  *
@@ -16,6 +17,8 @@
  * 「是否有日记」派生纪律：永远由日记目录文件存在性当场推导（readdir 列名，不读内容），
  * 绝不落盘缓存——手建/手删文件即时生效；.diary-meta 年表只存派生不出的字段（当日 emoji）。
  * 目录解析纪律：cordis patch 覆盖 > config.json（页面设置卡写它，每次请求现读）> 未配置。
+ * 评注 prompt 同款三级纪律（ADR-0001）：cordis patch > config.json（页面 prompt 卡写它）> 内置默认；
+ * 保存侧与运行期都以 promptDefects 校验输出契约，patch 塞坏 prompt 时运行期响亮报错、不静默回退。
  *
  * @module dsh-diary
  */
@@ -36,10 +39,10 @@ import {
   thirtyHour,
   withoutTrailingCommentBlock,
 } from './core.ts'
-import { BUNDLED_TEMPLATE, absolutize, loadPathVars, resolveDirValue, savePathVars } from './paths.ts'
+import { BUNDLED_TEMPLATE, absolutize, loadConfigVars, resolveDirValue, saveConfigVars } from './paths.ts'
 import { renderGuide } from './guide.ts'
 import { renderPage } from './page.ts'
-import { runSummary, type SummaryOutput } from './summary.ts'
+import { DEFAULT_SUMMARY_PROMPT, promptDefects, runSummary, type SummaryOutput } from './summary.ts'
 
 export interface DiaryPluginConfig {
   diaryDir: string
@@ -50,6 +53,7 @@ export interface DiaryPluginConfig {
   temperature: number
   timeoutMs: number
   nightCutoff: number
+  summaryPrompt: string
 }
 
 /** 路由注册的最小结构形状（对齐 dsh-host-webserver 的 WebRoute，内部版与 npm rc 同形）。 */
@@ -79,12 +83,12 @@ export class DiaryService extends Service {
   // diaryDir 不做 config.json 默认值（本 schemastery 无 .optional()，用 default('') 表达"未设置"）：
   // cordis patch 给了非空值就是覆盖，否则每次请求现读插件根 config.json（页面设置卡维护）。
   static Config = (() => {
-    const pathVars = loadPathVars()
+    const configVars = loadConfigVars()
     return z.object({
       diaryDir: z.string().default('').description('日记目录（YYYY-MM-DD.md）；缺省时读插件根 config.json（页面「设置」卡维护），都没有则未配置'),
       templatePath: z
         .string()
-        .default(pathVars.templatePath ?? BUNDLED_TEMPLATE)
+        .default(configVars.templatePath ?? BUNDLED_TEMPLATE)
         .description('模板路径；默认取 config.json，兜底为插件内置 assets/diary-template.md'),
       pagePath: z.string().default('/diary').description('web UI 页面路由'),
       provider: z.string().default('deepseek-official').description('总结调用的 provider 路由'),
@@ -92,6 +96,10 @@ export class DiaryService extends Service {
       temperature: z.number().default(0.6).description('总结生成温度'),
       timeoutMs: z.number().default(120_000).description('总结调用超时（毫秒）'),
       nightCutoff: z.number().default(6).description('30 小时制截止小时：此点前归前一天'),
+      summaryPrompt: z
+        .string()
+        .default('')
+        .description('评注 prompt 覆盖；缺省时读插件根 config.json（页面 prompt 卡维护），再兜底内置默认'),
     })
   })()
 
@@ -169,6 +177,7 @@ export class DiaryService extends Service {
       if (req.method === 'GET' && path === `${this.config.pagePath}/api/dates`) return await this.handleDates(res)
       if (req.method === 'GET' && path === `${this.config.pagePath}/api/models`) return await this.handleModels(res)
       if (path === `${this.config.pagePath}/api/settings`) return await this.handleSettings(req, res)
+      if (path === `${this.config.pagePath}/api/prompt`) return await this.handlePrompt(req, res)
       if (req.method === 'POST' && path === `${this.config.pagePath}/api/submit`) return await this.handleSubmit(req, res)
       if (req.method === 'POST' && path === `${this.config.pagePath}/api/retry-summary`) return await this.handleRetry(req, res)
       json(res, 404, { ok: false, error: `未知端点：${req.method} ${path}` })
@@ -179,12 +188,22 @@ export class DiaryService extends Service {
 
   /** 每次请求现解析日记目录（页面设置卡写 config.json 后无需重载即生效）。null = 未配置。 */
   private diaryDir(): string | null {
-    return resolveDirValue(this.config.diaryDir, loadPathVars().diaryDir)
+    return resolveDirValue(this.config.diaryDir, loadConfigVars().diaryDir)
   }
 
   /** patch/profile 给了非空目录且与 config.json 不同 → 页面设置被覆盖，写入不会生效。 */
   private patchOverridden(): boolean {
-    return this.config.diaryDir !== '' && this.config.diaryDir !== loadPathVars().diaryDir
+    return this.config.diaryDir !== '' && this.config.diaryDir !== loadConfigVars().diaryDir
+  }
+
+  /** 评注 prompt 三级解析（ADR-0001，与目录同款优先级）：cordis patch > config.json > 内置默认。 */
+  private effectivePrompt(): { prompt: string; customized: boolean; overridden: boolean } {
+    const fromFile = loadConfigVars().summaryPrompt
+    return {
+      prompt: this.config.summaryPrompt !== '' ? this.config.summaryPrompt : fromFile ?? DEFAULT_SUMMARY_PROMPT,
+      customized: fromFile !== undefined,
+      overridden: this.config.summaryPrompt !== '' && this.config.summaryPrompt !== fromFile,
+    }
   }
 
   private async todayState(): Promise<
@@ -363,7 +382,7 @@ export class DiaryService extends Service {
       })
     }
     try {
-      await savePathVars({ diaryDir: dir })
+      await saveConfigVars({ diaryDir: dir })
     } catch (err) {
       return json(res, 500, { ok: false, error: `config.json 写入失败：${messageOf(err)}` })
     }
@@ -374,6 +393,53 @@ export class DiaryService extends Service {
   private trustedHosts(): readonly string[] {
     const runtime = (this.pluginCtx as { webRuntime?: { trustedHosts?: readonly string[] } }).webRuntime
     return runtime?.trustedHosts ?? []
+  }
+
+  // ---------- 评注 prompt：页面 prompt 卡的后端（ADR-0001） ----------
+
+  /**
+   * GET /api/prompt：生效 prompt（三级解析后的值）+ customized（config.json 有自定义）+ overridden（patch 覆盖）。
+   * POST /api/prompt：{ prompt } 保存自定义（契约校验）；{ reset: true } 删键恢复内置默认。
+   * 与 /api/settings 同款围栏：仅本机（回环）请求可写；被 patch 覆盖时 409。
+   */
+  private async handlePrompt(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method === 'GET') {
+      const { prompt, customized, overridden } = this.effectivePrompt()
+      return json(res, 200, { ok: true, prompt, customized, overridden })
+    }
+    if (req.method !== 'POST') {
+      return json(res, 404, { ok: false, error: `未知端点：${req.method} /api/prompt` })
+    }
+    if (!isLocalRequest(req, this.trustedHosts())) {
+      return json(res, 403, { ok: false, error: 'prompt 端点仅接受本机（回环地址）请求' })
+    }
+    const body = await readJson(req)
+    const overridden = this.effectivePrompt().overridden
+    if (body.reset === true) {
+      if (overridden) {
+        return json(res, 409, { ok: false, error: '当前评注 prompt 由 profile/patch 配置覆盖，页面修改不会生效' })
+      }
+      try {
+        await saveConfigVars({}, { deletes: ['summaryPrompt'] })
+      } catch (err) {
+        return json(res, 500, { ok: false, error: `config.json 写入失败：${messageOf(err)}` })
+      }
+      return json(res, 200, { ok: true, prompt: DEFAULT_SUMMARY_PROMPT })
+    }
+    const raw = typeof body.prompt === 'string' ? body.prompt.trim() : ''
+    const defects = promptDefects(raw)
+    if (defects.length > 0) {
+      return json(res, 400, { ok: false, error: `评注 prompt 无效：${defects.join('；')}` })
+    }
+    if (overridden) {
+      return json(res, 409, { ok: false, error: '当前评注 prompt 由 profile/patch 配置覆盖，页面修改不会生效' })
+    }
+    try {
+      await saveConfigVars({ summaryPrompt: raw })
+    } catch (err) {
+      return json(res, 500, { ok: false, error: `config.json 写入失败：${messageOf(err)}` })
+    }
+    json(res, 200, { ok: true, prompt: raw })
   }
 
   // ---------- 提交：追加条目 + 总结 ----------
@@ -452,12 +518,23 @@ export class DiaryService extends Service {
   // ---------- 内部 ----------
 
   private summarize(diaryText: string, override: { provider?: string; model?: string } = {}): Promise<SummaryOutput> {
-    return runSummary(this.pluginCtx, {
-      provider: override.provider ?? this.config.provider,
-      model: override.model ?? this.config.model,
-      temperature: this.config.temperature,
-      timeoutMs: this.config.timeoutMs,
-    }, diaryText)
+    // 运行期契约校验兜底：保存侧拦页面，这里拦绕过 UI 的 cordis patch——响亮报错，不静默回退
+    const { prompt } = this.effectivePrompt()
+    const defects = promptDefects(prompt)
+    if (defects.length > 0) {
+      throw new Error(`diary: 评注 prompt 配置无效（${defects.join('；')}）——请修改 cordis patch 或在页面 prompt 卡恢复默认`)
+    }
+    return runSummary(
+      this.pluginCtx,
+      {
+        provider: override.provider ?? this.config.provider,
+        model: override.model ?? this.config.model,
+        temperature: this.config.temperature,
+        timeoutMs: this.config.timeoutMs,
+        systemPrompt: prompt,
+      },
+      diaryText,
+    )
   }
 
   private async loadTemplate(): Promise<string | null> {
