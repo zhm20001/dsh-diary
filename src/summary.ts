@@ -13,7 +13,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-llm'
-import { BlockAssembler, createUserMessage, deepFreeze } from '@deepseek-ai/dsh-llm'
+import { deepFreeze } from '@deepseek-ai/dsh-util-values'
+import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, FinishReason, GenerateOptions } from '@deepseek-ai/dsh-llm'
 
 /** 总结调用的 LLM 路由配置（provider/model/temperature 是插件配置，不随会话漂移）。 */

@@ -51,11 +51,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-llm": "^0.0.1-rc.1"
+    "@deepseek-ai/dsh-llm": "link:/Users/zhm20001/deepseek-harness/packages/llm/llm",
+    "@deepseek-ai/dsh-util-values": "link:/Users/zhm20001/deepseek-harness/packages/util/values"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/schemastery": "^3.18.2",
+    "@deepseek-ai/cordis": "link:/Users/zhm20001/deepseek-harness/vendor/cordis",
+    "@deepseek-ai/schemastery": "link:/Users/zhm20001/deepseek-harness/vendor/schemastery",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
