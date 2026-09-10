@@ -389,9 +389,11 @@ export class DiaryService extends Service {
     json(res, 200, { ok: true, diaryDir: dir })
   }
 
-  /** 宿主 webRuntime 的信任域名单（可能未注入，取不到就当空表）。 */
+  /** 宿主 webRuntime 的信任域名单（可能未提供，取不到就当空表）。 */
   private trustedHosts(): readonly string[] {
-    const runtime = (this.pluginCtx as { webRuntime?: { trustedHosts?: readonly string[] } }).webRuntime
+    // ctx 是 Proxy：直接读未在 inject 声明的服务属性会抛 "cannot get property ... without inject"，
+    // 可选服务必须走 ctx.get（无注入要求，未提供时返回 undefined）
+    const runtime = this.pluginCtx.get('webRuntime') as { trustedHosts?: readonly string[] } | undefined
     return runtime?.trustedHosts ?? []
   }
 

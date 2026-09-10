@@ -74,7 +74,7 @@ export declare class DiaryService extends Service {
      * POST /api/settings：写 config.json（仅本机请求；~ 展开、mkdir 探测），即时生效。
      */
     private handleSettings;
-    /** 宿主 webRuntime 的信任域名单（可能未注入，取不到就当空表）。 */
+    /** 宿主 webRuntime 的信任域名单（可能未提供，取不到就当空表）。 */
     private trustedHosts;
     /**
      * GET /api/prompt：生效 prompt（三级解析后的值）+ customized（config.json 有自定义）+ overridden（patch 覆盖）。
