@@ -84,6 +84,32 @@ export declare class DiaryService extends Service {
     private handlePrompt;
     private handleSubmit;
     private handleRetry;
+    /**
+     * 评注落盘后执行一次画像更新（旧画像全文 + 当天日记全文 → 新画像全文，同步落盘）。
+     * 失败语义：保存与总结已成功 → 响应仍 200，只回一条非致命警告字段；画像文件保持旧值，
+     * 无重试入口、无待重试标记、无断路器（下次提交天然自愈）。
+     */
+    private updateProfile;
+    /**
+     * POST /api/rebuild-profile：受守卫的全量重算。检测到画像文件已存在 → 拒绝
+     * （该按钮对此用户无意义，永不覆盖一份维护中的画像）；否则从全部历史日记按时间顺序
+     * 分块累积生成（每块一次标准更新调用，最旧分块优先），成功后一次性落盘。
+     * 成本警告与二次确认在页面侧完成，端点不重复拦截。
+     */
+    private handleRebuildProfile;
+    /** 总结调用的 LLM 路由（画像更新复用同一套，不新增配置键）。 */
+    private llmRoute;
+    /**
+     * 注入用的记忆上下文：画像全文 + 记忆窗口内过往记录日的概要行（零 LLM 成本）。
+     * 画像缺失/为空 → 空串（注入时整节省略）；坏日记文件（无评注块/字段缺失）降级跳过。
+     */
+    private buildMemory;
+    /** 列日记目录里的记录日文件（按记录日、文件名排序；「有没有日记」永远当场派生）。 */
+    private listDiaryFiles;
+    /** 某记录日的 digest：同日多文件按序取第一个能解析出评注块的；都坏 → null。 */
+    private readDayDigest;
+    /** 全量重算的输入：每个记录日一条（同日多文件合并），按时间升序。 */
+    private historyEntries;
     private summarize;
     private loadTemplate;
 }

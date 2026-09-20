@@ -11,6 +11,11 @@
  *   GET/POST <pagePath>/api/prompt    评注 prompt：GET 读生效值；POST 保存自定义或 reset 恢复默认（仅本机请求）
  *   POST <pagePath>/api/submit    追加条目 + 生成总结（同日再提交 = 追加并重新总结；可选 provider/model 覆盖）
  *   POST <pagePath>/api/retry-summary  仅重新生成总结（总结失败后的补救，不重复追加条目）
+ *   POST <pagePath>/api/rebuild-profile  全量重算：仅在检测不到画像文件时从全部历史生成初始画像
+ *
+ * 长期记忆（spec「Implementation Decisions」）：提交链路 = 原文落盘 → 总结 → 画像更新（第三步）。
+ * 画像更新失败是非致命的——保存与总结已成功，响应仍 200 并附 warning 字段；总结失败仍走
+ * 502（stage: summary）且不执行画像更新。总结调用前注入画像与近期概要（profile 模块组装）。
  *
  * 纪律（ADR-0005 同款）：日期判断/模板/拼装/落盘永远是代码；LLM 只产总结内容（含当日 emoji）。
  * 崩溃顺序保证：原文先落盘、评注后落盘——总结失败绝不丢用户原文。
@@ -43,6 +48,19 @@ import { BUNDLED_TEMPLATE, absolutize, loadConfigVars, resolveDirValue, saveConf
 import { renderGuide } from './guide.ts'
 import { renderPage } from './page.ts'
 import { DEFAULT_SUMMARY_PROMPT, promptDefects, runSummary, type SummaryOutput } from './summary.ts'
+import {
+  buildSummaryUserMessage,
+  formatDigestLine,
+  memoryWindow,
+  parseDayDigest,
+  profileExists,
+  readProfileText,
+  rebuildProfile,
+  runProfileUpdate,
+  type DayDigest,
+  type MemoryContext,
+} from './profile.ts'
+import type { LlmRoute } from './llm.ts'
 
 export interface DiaryPluginConfig {
   diaryDir: string
@@ -180,6 +198,7 @@ export class DiaryService extends Service {
       if (path === `${this.config.pagePath}/api/prompt`) return await this.handlePrompt(req, res)
       if (req.method === 'POST' && path === `${this.config.pagePath}/api/submit`) return await this.handleSubmit(req, res)
       if (req.method === 'POST' && path === `${this.config.pagePath}/api/retry-summary`) return await this.handleRetry(req, res)
+      if (path === `${this.config.pagePath}/api/rebuild-profile`) return await this.handleRebuildProfile(req, res)
       json(res, 404, { ok: false, error: `未知端点：${req.method} ${path}` })
     } catch (err) {
       json(res, 500, { ok: false, error: messageOf(err) })
@@ -351,11 +370,14 @@ export class DiaryService extends Service {
   private async handleSettings(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'GET') {
       const effective = this.diaryDir()
+      // profileExists 供设置卡渲染「从历史生成画像」按钮的守卫态（有画像即禁用）
+      const profileExistsFlag = effective === null ? false : await profileExists(effective)
       return json(res, 200, {
         ok: true,
         configured: effective !== null,
         diaryDir: effective,
         overridden: this.patchOverridden(),
+        profileExists: profileExistsFlag,
       })
     }
     if (req.method !== 'POST') {
@@ -477,10 +499,13 @@ export class DiaryService extends Service {
     await writeFile(path, content, 'utf8') // 原文先落盘
 
     try {
-      const summary = await this.summarize(content, await this.resolveModelOverride(body))
+      const override = await this.resolveModelOverride(body)
+      const summary = await this.summarize(dir, date, content, override)
       await writeFile(path, joinBlock(content, buildCommentBlock({ ...summary, clock })), 'utf8')
       if (summary.emoji !== undefined) await this.saveDayEmoji(dir, date, summary.emoji)
-      json(res, 200, { ok: true, date, clock, path, regenerated, ...summary })
+      // 第三步：画像更新（同步，响应返回前落盘）。失败非致命——只附警告，不改已成功的保存与总结
+      const warning = await this.updateProfile(dir, content, override)
+      json(res, 200, { ok: true, date, clock, path, regenerated, ...summary, ...(warning !== undefined ? { warning } : {}) })
     } catch (err) {
       json(res, 502, {
         ok: false,
@@ -508,7 +533,7 @@ export class DiaryService extends Service {
     }
     const base = withoutTrailingCommentBlock(content) ?? content
     try {
-      const summary = await this.summarize(base, await this.resolveModelOverride(body))
+      const summary = await this.summarize(dir, date, base, await this.resolveModelOverride(body))
       await writeFile(path, joinBlock(base, buildCommentBlock({ ...summary, clock })), 'utf8')
       if (summary.emoji !== undefined) await this.saveDayEmoji(dir, date, summary.emoji)
       json(res, 200, { ok: true, date, clock, path, ...summary })
@@ -517,26 +542,165 @@ export class DiaryService extends Service {
     }
   }
 
+  // ---------- 画像更新：提交链路的第三步（长期记忆） ----------
+
+  /**
+   * 评注落盘后执行一次画像更新（旧画像全文 + 当天日记全文 → 新画像全文，同步落盘）。
+   * 失败语义：保存与总结已成功 → 响应仍 200，只回一条非致命警告字段；画像文件保持旧值，
+   * 无重试入口、无待重试标记、无断路器（下次提交天然自愈）。
+   */
+  private async updateProfile(dir: string, diaryText: string, override: { provider?: string; model?: string }): Promise<string | undefined> {
+    try {
+      await runProfileUpdate(this.pluginCtx, this.llmRoute(override), dir, await readProfileText(dir), diaryText)
+      return undefined
+    } catch {
+      return '画像更新失败，不影响保存'
+    }
+  }
+
+  // ---------- 全量重算：从全部历史日记生成初始画像 ----------
+
+  /**
+   * POST /api/rebuild-profile：受守卫的全量重算。检测到画像文件已存在 → 拒绝
+   * （该按钮对此用户无意义，永不覆盖一份维护中的画像）；否则从全部历史日记按时间顺序
+   * 分块累积生成（每块一次标准更新调用，最旧分块优先），成功后一次性落盘。
+   * 成本警告与二次确认在页面侧完成，端点不重复拦截。
+   */
+  private async handleRebuildProfile(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== 'POST') {
+      return json(res, 404, { ok: false, error: `未知端点：${req.method} /api/rebuild-profile` })
+    }
+    if (!isLocalRequest(req, this.trustedHosts())) {
+      return json(res, 403, { ok: false, error: '全量重算端点仅接受本机（回环地址）请求' })
+    }
+    const dir = this.diaryDir()
+    if (dir === null) {
+      return json(res, 400, { ok: false, error: '尚未配置日记目录：点页面右上角「设置」填写存储路径' })
+    }
+    if (await profileExists(dir)) {
+      return json(res, 409, {
+        ok: false,
+        error: '已存在用户画像（.diary-meta/profile.md）：全量重算仅用于从零生成，不会覆盖正在维护中的画像',
+      })
+    }
+    const entries = await this.historyEntries(dir)
+    if (entries.length === 0) {
+      return json(res, 400, { ok: false, error: '日记目录里还没有历史日记可用来生成画像' })
+    }
+    try {
+      const profile = await rebuildProfile(this.pluginCtx, this.llmRoute(), dir, entries)
+      json(res, 200, { ok: true, days: entries.length, profileChars: profile.length })
+    } catch (err) {
+      // 中途失败不留半成品：画像文件保持不存在（rebuildProfile 只在全部成功后落盘）
+      json(res, 502, { ok: false, error: messageOf(err), hint: '画像文件未写入，可再次点击重试' })
+    }
+  }
+
   // ---------- 内部 ----------
 
-  private summarize(diaryText: string, override: { provider?: string; model?: string } = {}): Promise<SummaryOutput> {
+  /** 总结调用的 LLM 路由（画像更新复用同一套，不新增配置键）。 */
+  private llmRoute(override: { provider?: string; model?: string } = {}): LlmRoute {
+    return {
+      provider: override.provider ?? this.config.provider,
+      model: override.model ?? this.config.model,
+      temperature: this.config.temperature,
+      timeoutMs: this.config.timeoutMs,
+    }
+  }
+
+  /**
+   * 注入用的记忆上下文：画像全文 + 记忆窗口内过往记录日的概要行（零 LLM 成本）。
+   * 画像缺失/为空 → 空串（注入时整节省略）；坏日记文件（无评注块/字段缺失）降级跳过。
+   */
+  private async buildMemory(dir: string, date: string): Promise<MemoryContext> {
+    const profileText = await readProfileText(dir)
+    const files = await this.listDiaryFiles(dir)
+    const days = memoryWindow(
+      files.map((f) => f.date),
+      date,
+    )
+    if (days.length === 0) return { profileText, digestLines: [] }
+    const metas = await this.readDayMetas(dir)
+    const digestLines: string[] = []
+    for (const day of days) {
+      const digest = await this.readDayDigest(dir, files, day)
+      if (digest === null) continue
+      digestLines.push(formatDigestLine(day, digest, metas[day]?.emoji))
+    }
+    return { profileText, digestLines }
+  }
+
+  /** 列日记目录里的记录日文件（按记录日、文件名排序；「有没有日记」永远当场派生）。 */
+  private async listDiaryFiles(dir: string): Promise<{ date: string; name: string }[]> {
+    let names: string[] = []
+    try {
+      names = await readdir(dir)
+    } catch {
+      return []
+    }
+    return names
+      .map((name) => ({ date: extractRecordDate(name), name }))
+      .filter((f): f is { date: string; name: string } => f.date !== null)
+      .sort((a, b) => (a.date === b.date ? a.name.localeCompare(b.name) : a.date < b.date ? -1 : 1))
+  }
+
+  /** 某记录日的 digest：同日多文件按序取第一个能解析出评注块的；都坏 → null。 */
+  private async readDayDigest(
+    dir: string,
+    files: readonly { date: string; name: string }[],
+    date: string,
+  ): Promise<DayDigest | null> {
+    for (const file of files.filter((f) => f.date === date)) {
+      try {
+        const digest = parseDayDigest(await readFile(resolve(dir, file.name), 'utf8'))
+        if (digest !== null) return digest
+      } catch {
+        // 读不了的文件跳过，不影响其余记录日
+      }
+    }
+    return null
+  }
+
+  /** 全量重算的输入：每个记录日一条（同日多文件合并），按时间升序。 */
+  private async historyEntries(dir: string): Promise<{ date: string; text: string }[]> {
+    const files = await this.listDiaryFiles(dir)
+    const byDate = new Map<string, string[]>()
+    for (const file of files) {
+      const bucket = byDate.get(file.date) ?? []
+      bucket.push(file.name)
+      byDate.set(file.date, bucket)
+    }
+    const entries: { date: string; text: string }[] = []
+    for (const [date, names] of [...byDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+      const texts: string[] = []
+      for (const name of names) {
+        try {
+          // 与日常更新同构：喂给模型的是用户原文，不是我们过去写的评注块
+          const raw = await readFile(resolve(dir, name), 'utf8')
+          texts.push(withoutTrailingCommentBlock(raw) ?? raw)
+        } catch {
+          // 读不了的文件跳过
+        }
+      }
+      if (texts.length > 0) entries.push({ date, text: texts.join('\n\n') })
+    }
+    return entries
+  }
+
+  private async summarize(
+    dir: string,
+    date: string,
+    diaryText: string,
+    override: { provider?: string; model?: string } = {},
+  ): Promise<SummaryOutput> {
     // 运行期契约校验兜底：保存侧拦页面，这里拦绕过 UI 的 cordis patch——响亮报错，不静默回退
     const { prompt } = this.effectivePrompt()
     const defects = promptDefects(prompt)
     if (defects.length > 0) {
       throw new Error(`diary: 评注 prompt 配置无效（${defects.join('；')}）——请修改 cordis patch 或在页面 prompt 卡恢复默认`)
     }
-    return runSummary(
-      this.pluginCtx,
-      {
-        provider: override.provider ?? this.config.provider,
-        model: override.model ?? this.config.model,
-        temperature: this.config.temperature,
-        timeoutMs: this.config.timeoutMs,
-        systemPrompt: prompt,
-      },
-      diaryText,
-    )
+    const memory = await this.buildMemory(dir, date)
+    return runSummary(this.pluginCtx, { ...this.llmRoute(override), systemPrompt: prompt }, buildSummaryUserMessage(diaryText, memory))
   }
 
   private async loadTemplate(): Promise<string | null> {

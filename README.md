@@ -19,7 +19,7 @@ dsh（DeepSeek Harness）的日记插件：在一个纸感信纸风的 web 页�
 | 谁 | 负责 |
 |---|---|
 | 插件代码（确定性） | 30 小时制日期判断（读系统时间）、按模板建档、条目追加、评注区排版、时间戳收尾、再提交时旧评注摘除 |
-| LLM（经 `ctx.llm` 直调） | 只产四样东西：【今日关键词】【一句话总结】【当日 emoji】【评注】——provider/model/temperature 默认取插件配置；页面「AI 评注模型」选择器可逐次覆盖 provider/model（仅采纳模型目录里存在的组合，其余静默回退默认） |
+| LLM（经 `ctx.llm` 直调） | 只产四样东西：【今日关键词】【一句话总结】【当日 emoji】【评注】——provider/model/temperature 默认取插件配置；页面「AI 评注模型」选择器可逐次覆盖 provider/model（仅采纳模型目录里存在的组合，其余静默回退默认）。另在评注落盘后产出一份新的用户画像全文（同一套路由，见「长期记忆」） |
 
 ## 快速上手
 
@@ -33,7 +33,7 @@ dsh plugin --profile web add <本目录路径>
 
 首次打开页面是**设置卡**：填一个日记目录（如 `~/Documents/日记`，`~` 会展开），保存即写入插件根 `config.json`，立即生效、无需重启。然后写第一篇 → 点「保存并生成总结」。
 
-日常流程：打开页面 → 写 → 提交。原文即刻落盘；总结失败不丢原文，点「仅重试总结」补生成。草稿自动存浏览器 localStorage（按日期分键）。dsh web 侧栏底部也有「日记」入口（`src/client.js`，文案中英自适应）。
+日常流程：打开页面 → 写 → 提交。原文即刻落盘；总结失败不丢原文，点「仅重试总结」补生成。草稿自动存浏览器 localStorage（按日期分键）。dsh web 侧栏底部也有「日记」入口（`src/client.js`，文案中英自适应）。每次提交还会静默更新一份用户画像（见「长期记忆」），失败只在页面给一条不影响保存的提示。
 
 ## 配置
 
@@ -49,10 +49,21 @@ dsh plugin --profile web add <本目录路径>
 
 其余插件项（cordis patch 层）：`provider` / `model`（总结模型，默认 `deepseek-official` / `deepseek-chat`）、`temperature`（0.6）、`timeoutMs`（120000）、`nightCutoff`（6）、`pagePath`（`/diary`；改动需同步 `src/client.js` 里的 href）、`summaryPrompt`（评注 prompt 覆盖）。
 
+## 长期记忆（用户画像）
+
+每次保存日记时，系统在总结之外并行维护一份**用户画像**——纯文本 markdown，存在日记目录的 `.diary-meta/profile.md`，与 emoji 元表相邻但概念独立，可以直接翻开看。
+
+- **注入**：生成当日总结前，画像全文与近一周记录日的概要（记忆窗口 = 今天 + 前 6 个记录日，每日「关键词 + 一句话」，从往日日记的评注块提取，零额外调用）作为参考数据拼进总结请求；当天日记全文仍是唯一主体。画像缺失或为空时自动省略该节，总结照常。
+- **更新**：评注落盘后立刻发起一次独立的画像更新调用（旧画像全文 + 当天日记全文 → 新画像全文），同步完成、随响应返回前写完磁盘。画像按「人格核心 / 阶段性状态 / 近期事件」三分层维护，更新规则内置固定（近期事件超期无复提由模型裁决去留、容量有硬上限），用户不可编辑——你能改的是评注 prompt（怎么用上下文），改不了的是更新规则（怎么改画像）。
+- **失败语义**：画像更新失败不影响保存与总结——接口仍返回 200，页面显示一条「画像更新失败，不影响保存」的提示；无重试入口，下次提交天然自愈。总结失败仍走既有 502 路径，且不触发画像更新。
+- **全量重算**：设置卡里的「从历史生成画像」按钮，仅在检测不到画像文件时可点（有画像即禁用，永不覆盖维护中的画像）；点击弹成本警告并二次确认后，从全部历史日记按时间顺序分块累积生成初始画像。换机器 = 拷贝 `.diary-meta/profile.md`。
+
+整套功能没有开关、没有新配置键：每日 LLM 用量约翻倍（多一次画像更新调用 + 总结多带一份画像），单用户场景绝对值可忽略。日记原文永远不被「遗忘」改动——画像是可重算的派生状态。
+
 ## 隐私与数据
 
-- 日记全文只落本地盘；**唯一的外发**是总结请求：当日全文发给你配置（或页面选择）的 LLM provider，换取四件套。热力图数据、meta、草稿都不出本机（草稿在浏览器 localStorage）。
-- 数据自包含在日记目录：正文 `YYYY-MM-DD.md`，当日 emoji 在同目录隐藏文件夹 `.diary-meta/YYYY.json`。**备份 = 整个目录复制**（迁移别漏 `.diary-meta/`，否则 emoji 静默降级成绿块）。
+- 日记全文只落本地盘；**唯一的外发**是总结请求：当日全文 + 用户画像 + 近一周概要发给你配置（或页面选择）的 LLM provider，换取四件套（画像更新调用同样只在本机与 provider 之间往返）。热力图数据、meta、草稿都不出本机（草稿在浏览器 localStorage）。
+- 数据自包含在日记目录：正文 `YYYY-MM-DD.md`，当日 emoji 在同目录隐藏文件夹 `.diary-meta/YYYY.json`，用户画像在同文件夹 `profile.md`。**备份 = 整个目录复制**（迁移别漏 `.diary-meta/`，否则 emoji 静默降级成绿块、画像回到冷启动）。
 - 「有没有写」永远由目录文件名当场派生（含 `-后缀` 文件），不落缓存：手建/手删/改名即时反映到热力图；meta 里的孤儿 emoji 会被无害忽略。
 
 ## 语义细节
@@ -76,7 +87,7 @@ pnpm build              # 重新生成 lib/（CI 会校验产物与 src 无漂�
 dsh web --patch dev.patch.yml   # 浏览器访问 /diary-dev
 ```
 
-结构：`src/core.ts` 纯函数（无 IO）→ `src/paths.ts` 路径变量（config.json 读写）→ `src/service.ts` 路由与编排（webServer/httpServer 双名兼容）→ `src/summary.ts` LLM 管线 → `src/page.ts` 页面 + `src/guide.ts` 指南。`lib/` 为编译产物、随仓库提交（克隆分发免构建）；`src/` 改动必须带 `lib/` 一起提交。
+结构：`src/core.ts` 纯函数（无 IO）→ `src/paths.ts` 路径变量（config.json 读写）→ `src/service.ts` 路由与编排（webServer/httpServer 双名兼容）→ `src/summary.ts` 总结 LLM 管线 → `src/profile.ts` 长期记忆（画像读写 / 注入组装 / 更新回路 / 全量重算）→ `src/page.ts` 页面 + `src/guide.ts` 指南。`lib/` 为编译产物、随仓库提交（克隆分发免构建）；`src/` 改动必须带 `lib/` 一起提交。
 
 宿主要求：dsh web 宿主（内部 harness 版暴露 `ctx.webServer`，npm `@deepseek-ai/dsh-host-webserver` rc 线暴露 `ctx.httpServer`——两者均兼容）。
 
