@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # 公开仓库守卫：本机绝对路径/本地路径协议依赖在 CI 不可解析，越早失败越好
+      - run: sh scripts/check-local-paths.sh
       - uses: pnpm/action-setup@v4
         with:
           version: 11

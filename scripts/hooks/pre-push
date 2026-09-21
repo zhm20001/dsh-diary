@@ -1,0 +1,4 @@
+#!/bin/sh
+# push 前在干净克隆里复现 CI 全流程（scripts/ci-parity.sh）。
+# 启用方式（克隆后一次性）：git config core.hooksPath scripts/hooks
+exec sh "$(dirname "$0")/../ci-parity.sh"
